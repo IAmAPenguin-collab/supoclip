@@ -9,6 +9,7 @@ import assemblyai as aai
 from ..config import get_config
 import httpx
 import json
+import os
 import re
 import time
 from .common import (
@@ -186,6 +187,108 @@ def _get_whisper_model(model_name: str = "base"):
     return _WHISPER_MODEL_CACHE[model_name]
 
 
+_FASTER_WHISPER_MODEL_CACHE: Dict[str, Any] = {}
+
+
+def _whisper_engine() -> str:
+    """WHISPER_ENGINE: "openai" (default, openai-whisper) or "faster" (faster-whisper)."""
+    engine = (os.getenv("WHISPER_ENGINE") or "openai").strip().lower()
+    return "faster" if engine in {"faster", "faster-whisper", "faster_whisper"} else "openai"
+
+
+def _get_faster_whisper_model(model_name: str):
+    """Load and cache a faster-whisper (CTranslate2) model for CPU inference."""
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError as exc:  # pragma: no cover - optional transcription backend
+        raise RuntimeError(
+            "faster-whisper is not installed. Install it with: uv add faster-whisper"
+        ) from exc
+    compute_type = (os.getenv("WHISPER_COMPUTE_TYPE") or "int8").strip()
+    cpu_threads = int(os.getenv("WHISPER_CPU_THREADS") or "0")
+    key = f"{model_name}:{compute_type}:{cpu_threads}"
+    if key not in _FASTER_WHISPER_MODEL_CACHE:
+        logger.info(
+            "Loading faster-whisper model: %s (compute_type=%s, cpu_threads=%s)",
+            model_name,
+            compute_type,
+            cpu_threads or "auto",
+        )
+        _FASTER_WHISPER_MODEL_CACHE[key] = WhisperModel(
+            model_name, device="cpu", compute_type=compute_type, cpu_threads=cpu_threads
+        )
+    return _FASTER_WHISPER_MODEL_CACHE[key]
+
+
+def _transcribe_with_faster_whisper(
+    audio_path: Path, model_name: str, language: Optional[str]
+) -> Dict[str, Any]:
+    """Run faster-whisper and return the same dict shape openai-whisper produces.
+
+    Segments carry second-based ``start``/``end``, ``text`` and ``words`` with
+    ``word``/``start``/``end``/``probability``, so caching and analysis code
+    stays unchanged. Progress is logged every ~5% of the audio.
+    """
+    model = _get_faster_whisper_model(model_name)
+    use_vad = (os.getenv("WHISPER_VAD") or "true").strip().lower() not in {"0", "false", "no", "off"}
+    logger.info(
+        "Starting faster-whisper transcription with model: %s (language: %s, vad: %s)",
+        model_name,
+        language or "auto",
+        use_vad,
+    )
+    started = time.monotonic()
+    segments_iter, info = model.transcribe(
+        str(audio_path),
+        language=language,
+        word_timestamps=True,
+        vad_filter=use_vad,
+        # Stops one hallucinated line from repeating through long music or silence.
+        condition_on_previous_text=False,
+    )
+    duration = float(getattr(info, "duration", 0) or 0)
+    segments: List[Dict[str, Any]] = []
+    texts: List[str] = []
+    next_report = 0.05
+    for seg in segments_iter:
+        words = [
+            {
+                "word": w.word,
+                "start": float(w.start),
+                "end": float(w.end),
+                "probability": float(w.probability),
+            }
+            for w in (seg.words or [])
+        ]
+        segments.append(
+            {"start": float(seg.start), "end": float(seg.end), "text": seg.text, "words": words}
+        )
+        texts.append(seg.text)
+        if duration > 0 and seg.end / duration >= next_report:
+            elapsed = time.monotonic() - started
+            fraction = min(seg.end / duration, 1.0)
+            remaining = elapsed / fraction - elapsed if fraction > 0 else 0
+            logger.info(
+                "faster-whisper progress: %.0f%% (%.0f of %.0f min audio), elapsed %.0f min, ~%.0f min left",
+                fraction * 100,
+                seg.end / 60,
+                duration / 60,
+                elapsed / 60,
+                remaining / 60,
+            )
+            next_report = fraction + 0.05
+    logger.info(
+        "faster-whisper finished: %d segments in %.1f min",
+        len(segments),
+        (time.monotonic() - started) / 60,
+    )
+    return {
+        "text": "".join(texts),
+        "segments": segments,
+        "language": getattr(info, "language", None) or language,
+    }
+
+
 def transcribe_with_whisper(
     video_path: Path, model_name: str = "base", language: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -193,10 +296,13 @@ def transcribe_with_whisper(
 
     ``language`` None lets Whisper detect it; AssemblyAI-style codes such as
     ``en_us`` are reduced to the ISO 639-1 base Whisper expects.
+    WHISPER_ENGINE=faster switches to faster-whisper with the same output.
     """
     audio_path = _prepare_audio_for_transcription(video_path)
-    model = _get_whisper_model(model_name)
     whisper_language = language.split("_", 1)[0] if language else None
+    if _whisper_engine() == "faster":
+        return _transcribe_with_faster_whisper(audio_path, model_name, whisper_language)
+    model = _get_whisper_model(model_name)
     logger.info(
         "Starting Whisper transcription with model: %s (language: %s)",
         model_name,

@@ -170,6 +170,11 @@ class Config:
         self.processing_task_timeout_seconds = int(
             os.getenv("PROCESSING_TASK_TIMEOUT_SECONDS", "14400")
         )
+        # Wall-clock limit arq gives one video job. Keep it below
+        # PROCESSING_TASK_TIMEOUT_SECONDS.
+        self.video_job_timeout_seconds = int(
+            os.getenv("VIDEO_JOB_TIMEOUT_SECONDS", "10800")
+        )
         # One account can hold at most this many video renders at once. The
         # worker has a handful of CPU slots, and one render can run for hours,
         # so the default is 1: a second video from the same account waits

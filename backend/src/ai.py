@@ -7,14 +7,18 @@ from typing import List, Dict, Any, Optional, Literal
 import asyncio
 import logging
 import math
+import os
 import random
 import re
 
 import httpx
 from pydantic_ai import Agent, NativeOutput
-from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.models import Model
 from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.models.fallback import FallbackModel
+from pydantic_ai.models.google import GoogleModel
+from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.models.ollama import OllamaModel
 from pydantic_ai.models.openrouter import OpenRouterModel
 from pydantic_ai.profiles.openai import OpenAIModelProfile
@@ -37,18 +41,29 @@ MIN_ACCEPTED_CLIP_SECONDS = 15
 MAX_ACCEPTED_CLIP_SECONDS = 60
 TRANSCRIPT_ANALYSIS_CACHE_VERSION = "windowed-rerank-v6"
 TRANSCRIPT_ANALYSIS_MAX_ATTEMPTS = 3
-TRANSCRIPT_ANALYSIS_TIMEOUT_SECONDS = 600
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name, "").strip()
+    return int(value) if value else default
+
+
+# The defaults suit cloud models. A local model on CPU needs far longer:
+# raise these with the AI_* environment variables below.
+TRANSCRIPT_ANALYSIS_TIMEOUT_SECONDS = _env_int("AI_WINDOW_TIMEOUT_SECONDS", 600)
 # Long transcripts are analysed in overlapping windows so every part of the
 # source gets the model's full attention; candidates are then reranked together.
 ANALYSIS_WINDOW_SECONDS = 12 * 60
 ANALYSIS_WINDOW_OVERLAP_SECONDS = 2 * 60
 ANALYSIS_SINGLE_WINDOW_MAX_SECONDS = 15 * 60
-ANALYSIS_WINDOW_CONCURRENCY = 3
+# A local Ollama answers one request at a time; queued windows would burn
+# their own timeout while waiting, so use 1 there.
+ANALYSIS_WINDOW_CONCURRENCY = max(1, _env_int("AI_WINDOW_CONCURRENCY", 3))
 ANALYSIS_WINDOW_SEGMENT_TARGET = "3-5"
 # Wall-clock budget for all windows together. Each window additionally keeps
 # its own TRANSCRIPT_ANALYSIS_TIMEOUT_SECONDS budget once it starts running.
-ANALYSIS_TOTAL_TIMEOUT_SECONDS = 1800
-RERANK_TIMEOUT_SECONDS = 240
+ANALYSIS_TOTAL_TIMEOUT_SECONDS = _env_int("AI_TOTAL_TIMEOUT_SECONDS", 1800)
+RERANK_TIMEOUT_SECONDS = _env_int("AI_RERANK_TIMEOUT_SECONDS", 240)
+# One HTTP request to the model. pydantic-ai's own default is 600s.
+AI_HTTP_TIMEOUT_SECONDS = _env_int("AI_HTTP_TIMEOUT_SECONDS", 600)
 CANDIDATE_DEDUPE_OVERLAP_RATIO = 0.5
 # How far a model timestamp may sit from a transcript line boundary and still be
 # snapped onto it instead of the whole clip being dropped.
@@ -208,6 +223,19 @@ def _default_virality_analysis() -> ViralityAnalysis:
     return ViralityAnalysis()
 
 
+_TIMESTAMP_PATTERN = re.compile(r"\d{1,3}:\d{2}(?::\d{2})?")
+
+
+def _pick_timestamp(value: Any, *, last: bool) -> Any:
+    """Reduce a value holding several timestamps to one; leave others alone."""
+    if not isinstance(value, str):
+        return value
+    found = _TIMESTAMP_PATTERN.findall(value)
+    if len(found) < 2:
+        return value.strip().strip("[]").strip() if found else value
+    return found[-1] if last else found[0]
+
+
 class TranscriptSegment(BaseModel):
     """Represents a relevant segment of transcript with precise timing and virality analysis."""
 
@@ -256,6 +284,19 @@ class TranscriptSegment(BaseModel):
         default=None,
         description="Optional MM:SS end of that hook line (null with hook_start_time).",
     )
+
+    # Local models often copy a transcript line label ("[09:06 - 09:13]") into a
+    # single timestamp field, which used to drop ~40% of their candidates.
+    # A start keeps the first timestamp it contains and an end keeps the last.
+    @field_validator("start_time", mode="before")
+    @classmethod
+    def _first_timestamp_of_range(cls, value: Any) -> Any:
+        return _pick_timestamp(value, last=False)
+
+    @field_validator("end_time", mode="before")
+    @classmethod
+    def _last_timestamp_of_range(cls, value: Any) -> Any:
+        return _pick_timestamp(value, last=True)
 
     @field_validator("relevance_score", mode="before")
     @classmethod
@@ -508,7 +549,40 @@ def _uses_native_output(model_name: str) -> bool:
 def _build_transcript_model(
     runtime_config: Config, model_name: str | None = None
 ) -> Model | str:
+    """Build the configured model, backed by LLM_FALLBACK when that is set.
+
+    With LLM=google-gla:<gemini> and LLM_FALLBACK=ollama:<model>, a Gemini
+    quota error (429), outage or connection failure sends that same request to
+    the local model, so a run finishes instead of failing.
+    """
     model_name = model_name or runtime_config.llm
+    primary = _build_single_model(runtime_config, model_name)
+    # Comma-separated and tried in order, e.g.
+    # LLM_FALLBACK=google-gla:gemini-3.5-flash,ollama:gemma4:12b
+    fallbacks = []
+    for fallback_name in os.getenv("LLM_FALLBACK", "").split(","):
+        fallback_name = fallback_name.strip()
+        if not fallback_name or fallback_name == model_name:
+            continue
+        fallback_error = _get_missing_llm_key_error(fallback_name, runtime_config)
+        if fallback_error:
+            logger.warning("Ignoring LLM_FALLBACK entry %s: %s", fallback_name, fallback_error)
+            continue
+        fallbacks.append((fallback_name, _build_single_model(runtime_config, fallback_name)))
+    if not fallbacks:
+        return primary
+    logger.info(
+        "Using %s with fallbacks %s", model_name, ", ".join(name for name, _ in fallbacks)
+    )
+    # Timeouts and dropped connections can surface as raw httpx errors.
+    return FallbackModel(
+        primary,
+        *(model for _, model in fallbacks),
+        fallback_on=(ModelAPIError, httpx.HTTPError, TimeoutError),
+    )
+
+
+def _build_single_model(runtime_config: Config, model_name: str) -> Model | str:
     provider, provider_model_name = _split_llm_name(model_name)
     if provider == "anthropic" and _uses_native_output(model_name):
         # The installed SDK predates Sonnet 5.5. This model requires native
@@ -542,6 +616,21 @@ def _build_transcript_model(
                 "max_tokens": 8192,
             },
         )
+    if provider in {"google", "google-gla"} and provider_model_name:
+        # A busy free-tier Gemini can hang instead of answering 503. A short
+        # timeout lets the fallback take over instead of waiting 10 minutes.
+        return GoogleModel(
+            provider_model_name,
+            provider=GoogleProvider(
+                api_key=runtime_config.google_api_key,
+                http_client=httpx.AsyncClient(
+                    timeout=httpx.Timeout(
+                        timeout=_env_int("AI_GOOGLE_TIMEOUT_SECONDS", AI_HTTP_TIMEOUT_SECONDS),
+                        connect=10,
+                    )
+                ),
+            ),
+        )
     if provider != "ollama":
         return model_name
 
@@ -551,11 +640,19 @@ def _build_transcript_model(
             "Use the format ollama:<model>, for example ollama:gpt-oss:20b."
         )
 
+    # Thinking models (Gemma 4, Qwen 3, gpt-oss) can write thousands of hidden
+    # reasoning tokens per window; on CPU that is most of the run time.
+    # OLLAMA_REASONING_EFFORT=none turns it off (low/medium/high also work).
+    reasoning_effort = os.getenv("OLLAMA_REASONING_EFFORT", "").strip()
     return OllamaModel(
         provider_model_name,
+        settings={"extra_body": {"reasoning_effort": reasoning_effort}} if reasoning_effort else None,
         provider=OllamaProvider(
             base_url=runtime_config.resolve_ollama_base_url(),
             api_key=runtime_config.ollama_api_key,
+            http_client=httpx.AsyncClient(
+                timeout=httpx.Timeout(timeout=AI_HTTP_TIMEOUT_SECONDS, connect=5)
+            ),
         ),
     )
 
