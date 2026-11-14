@@ -220,6 +220,38 @@ it("sends the caption defaults saved in Settings with a new task", async () => {
   expect(JSON.parse(String(init?.body)).font_options).toEqual({ font_family: "Inter", font_size: null, font_color: "#FFD700" });
 });
 
+describe("queueing more VODs", () => {
+  it("creates one task per queued link with the same settings, in order", async () => {
+    await renderHome();
+    fireEvent.change(urlInput(), { target: { value: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" } });
+    fireEvent.click(screen.getByRole("button", { name: "Queue more VODs" }));
+    fireEvent.change(screen.getByLabelText("More links to queue"), {
+      target: { value: "https://www.youtube.com/watch?v=aaaaaaaaaaa\n\n https://www.youtube.com/watch?v=bbbbbbbbbbb " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Generate clips" }));
+
+    await waitFor(() => expect(created).toHaveLength(3));
+    expect(created.map((body) => (body.source as { url: string }).url)).toEqual([
+      "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      "https://www.youtube.com/watch?v=aaaaaaaaaaa",
+      "https://www.youtube.com/watch?v=bbbbbbbbbbb",
+    ]);
+    const settingsOf = (body: Record<string, unknown>) => ({ ...body, source: undefined });
+    expect(settingsOf(created[2])).toEqual(settingsOf(created[0]));
+  });
+
+  it("refuses the whole batch when a queued line is not a video link", async () => {
+    await renderHome();
+    fireEvent.change(urlInput(), { target: { value: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" } });
+    fireEvent.click(screen.getByRole("button", { name: "Queue more VODs" }));
+    fireEvent.change(screen.getByLabelText("More links to queue"), { target: { value: "not-a-link" } });
+    fireEvent.click(screen.getByRole("button", { name: "Generate clips" }));
+
+    expect(await screen.findByText(/^not-a-link: /)).toBeInTheDocument();
+    expect(created).toHaveLength(0);
+  });
+});
+
 describe("when the server does not offer workflows", () => {
   for (const [label, response] of [
     ["disabled", () => Response.json({ ...workflowsInfo, enabled: false })],

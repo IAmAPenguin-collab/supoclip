@@ -32,6 +32,15 @@ ACTIVE_KEY = "user_video_active:{user_id}"
 # and is pruned once that task is no longer processing.
 SLOT_TTL_SECONDS = 6 * 60 * 60
 
+
+def _slot_ttl_seconds() -> int:
+    """Outlive the processing fail-safe even when it is raised for long VODs.
+
+    A slot that expired mid-render would let the next queued video start on
+    top of it, which on a CPU-only machine slows both to a crawl.
+    """
+    return max(SLOT_TTL_SECONDS, get_config().processing_task_timeout_seconds + 3600)
+
 UPLOAD_WAIT_KEY = "upload_wait:{task_id}"
 UPLOAD_WAIT_MESSAGE = "Saving your upload..."
 UPLOAD_LOST_MESSAGE = "The uploaded video could not be saved. Upload it again to retry."
@@ -63,7 +72,7 @@ def _decode(value) -> str:
 async def acquire_video_slot(redis, user_id: str, task_id: str, limit: int) -> bool:
     key = ACTIVE_KEY.format(user_id=user_id)
     result = await redis.eval(
-        _ACQUIRE_LUA, 1, key, task_id, str(limit), str(SLOT_TTL_SECONDS)
+        _ACQUIRE_LUA, 1, key, task_id, str(limit), str(_slot_ttl_seconds())
     )
     return int(result) == 1
 

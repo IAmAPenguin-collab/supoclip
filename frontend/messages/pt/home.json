@@ -29,6 +29,7 @@
   "removeFile": "Remover arquivo",
   "youtubeUrl": "URL do YouTube",
   "urlPlaceholder": "Cole um link do YouTube ou solte um arquivo de vídeo",
+"queue": { "chip": "Enfileirar mais VODs", "label": "Mais links para a fila", "placeholder": "Cole mais links, um por linha. Eles rodam um após o outro, com as mesmas configurações.", "invalid": "{link}: {error}", "status": "Enfileirando {current} de {total}...", "someFailed": "Não foi possível enfileirar estes links: {links}" },
   "uploadFile": "Enviar um arquivo de vídeo",
   "upload": "Enviar",
   "defaultTemplate": "Padrão",

@@ -29,6 +29,7 @@
   "removeFile": "Remove file",
   "youtubeUrl": "YouTube, Twitch, or Kick URL",
   "urlPlaceholder": "Paste a YouTube, Twitch, or Kick VOD/clip link",
+"queue": { "chip": "Queue more VODs", "label": "More links to queue", "placeholder": "Paste more links, one per line. They run one after another, with the same settings.", "invalid": "{link}: {error}", "status": "Queueing {current} of {total}...", "someFailed": "These links could not be queued: {links}" },
   "uploadFile": "Upload a video file",
   "upload": "Upload",
   "defaultTemplate": "Default",

@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import {
   AlertCircle, ArrowRight, ArrowUp, Captions, CaptionsOff, Check, ChevronDown, Clapperboard, Crop, FileVideo, SlidersHorizontal,
-  Info, ListOrdered, Loader2, MessageSquareText, Timer, Paperclip, Sparkles, Target, Upload, Link2, Wand2, X,
+  Info, ListOrdered, ListPlus, Loader2, MessageSquareText, Timer, Paperclip, Sparkles, Target, Upload, Link2, Wand2, X,
 } from "lucide-react";
 import { CaptionSizeControl } from "@/components/caption-size-control";
 import { ComposerSettings } from "@/components/composer-settings";
@@ -140,6 +140,10 @@ export default function HomeApp() {
   const t = useTranslations("home");
   const tCommon = useTranslations("common");
   const [url, setUrl] = useState("");
+  // Extra links queued behind the main one. The backend runs one video per
+  // account at a time, in submission order, so these form a chain.
+  const [queueOpen, setQueueOpen] = useState(false);
+  const [queuedUrls, setQueuedUrls] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -752,6 +756,13 @@ export default function HomeApp() {
       const validation = validateVideoSourceUrl(sourceUrl);
       if (validation.error) { setError(validation.error); return; }
     }
+    const extraLinks = queueOpen && !file
+      ? queuedUrls.split(/\s+/).map((link) => link.trim()).filter(Boolean)
+      : [];
+    for (const link of extraLinks) {
+      const check = validateVideoSourceUrl(link);
+      if (check.error) { setError(t("queue.invalid", { link, error: check.error })); return; }
+    }
 
     setIsLoading(true);
     setError(null);
@@ -835,6 +846,29 @@ export default function HomeApp() {
         filtered_words: normalizedFilteredWords,
         processing_mode: "fast",
       });
+      if (extraLinks.length > 0) {
+        // Same settings for every link; each waits its turn on the backend.
+        const failed: string[] = [];
+        for (const [index, link] of extraLinks.entries()) {
+          setStatusMessage(t("queue.status", { current: index + 1, total: extraLinks.length }));
+          const queued = await fetch("/api/tasks/create", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...request, source: { url: link, title: null } }),
+          }).catch(() => null);
+          if (!queued?.ok) failed.push(link);
+        }
+        if (failed.length > 0) {
+          setQueuedUrls(failed.join("\n"));
+          setError(t("queue.someFailed", { links: failed.join(", ") }));
+          setIsLoading(false);
+          setStatusMessage("");
+          return;
+        }
+        setQueuedUrls("");
+        window.location.href = "/list";
+        return;
+      }
       window.location.href = taskPathFromCreate(startResult);
     } catch (error) {
       console.error("Error processing video:", error);
@@ -982,6 +1016,24 @@ export default function HomeApp() {
               )}
             </div>
 
+            {queueOpen && !file && (
+              <div className="relative flex items-start gap-2 pb-2 pl-[3.5rem] pr-3 sm:pl-[3.75rem] sm:pr-4">
+                <span className="mt-1 flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground"><ListPlus className="size-4" aria-hidden /></span>
+                <div className="min-w-0 flex-1">
+                  <Textarea
+                    id="queued-urls"
+                    rows={3}
+                    aria-label={t("queue.label")}
+                    placeholder={t("queue.placeholder")}
+                    value={queuedUrls}
+                    onChange={(e) => setQueuedUrls(e.target.value)}
+                    disabled={controlsDisabled}
+                    className="min-h-11 resize-y rounded-none border-0 bg-transparent px-0 py-2.5 text-base shadow-none focus-visible:ring-0 md:text-base dark:bg-transparent"
+                  />
+                </div>
+              </div>
+            )}
+
             {activeWorkflow === "topic" && (
               <div className="relative flex items-start gap-2 pb-2 pl-[3.5rem] pr-3 sm:pl-[3.75rem] sm:pr-4">
                 <SourceBranch continues={instructionsOffered && instructionsOpen} />
@@ -1103,6 +1155,21 @@ export default function HomeApp() {
                   className="px-2"
                 >
                   <MessageSquareText className="size-3.5" />
+                </Chip>
+              )}
+
+              {!file && (
+                <Chip
+                  onClick={() => setQueueOpen((open) => !open)}
+                  disabled={controlsDisabled}
+                  active={queueOpen || queuedUrls.trim().length > 0}
+                  aria-expanded={queueOpen}
+                  aria-controls={queueOpen ? "queued-urls" : undefined}
+                  aria-label={t("queue.chip")}
+                  title={t("queue.chip")}
+                  className="px-2"
+                >
+                  <ListPlus className="size-3.5" />
                 </Chip>
               )}
 

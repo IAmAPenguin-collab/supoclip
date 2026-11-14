@@ -29,6 +29,7 @@
   "removeFile": "Datei entfernen",
   "youtubeUrl": "YouTube-URL",
   "urlPlaceholder": "Füg einen YouTube-Link ein oder zieh eine Videodatei hierher",
+"queue": { "chip": "Weitere VODs einreihen", "label": "Weitere Links zum Einreihen", "placeholder": "Füg weitere Links ein, einen pro Zeile. Sie laufen nacheinander mit denselben Einstellungen.", "invalid": "{link}: {error}", "status": "Reihe {current} von {total} ein...", "someFailed": "Diese Links konnten nicht eingereiht werden: {links}" },
   "uploadFile": "Eine Videodatei hochladen",
   "upload": "Hochladen",
   "defaultTemplate": "Standard",

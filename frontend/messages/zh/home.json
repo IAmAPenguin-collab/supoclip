@@ -29,6 +29,7 @@
   "removeFile": "移除文件",
   "youtubeUrl": "YouTube 链接",
   "urlPlaceholder": "粘贴 YouTube 链接，或拖入视频文件",
+"queue": { "chip": "排队更多 VOD", "label": "要排队的更多链接", "placeholder": "粘贴更多链接，每行一个。它们会使用相同设置依次处理。", "invalid": "{link}：{error}", "status": "正在排队第 {current} 个，共 {total} 个...", "someFailed": "这些链接无法加入队列：{links}" },
   "uploadFile": "上传视频文件",
   "upload": "上传",
   "defaultTemplate": "默认",

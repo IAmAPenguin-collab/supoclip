@@ -29,6 +29,7 @@
   "removeFile": "Quitar archivo",
   "youtubeUrl": "URL de YouTube",
   "urlPlaceholder": "Pega un enlace de YouTube o suelta un archivo de video",
+"queue": { "chip": "Añadir más VODs a la cola", "label": "Más enlaces para la cola", "placeholder": "Pega más enlaces, uno por línea. Se procesan uno tras otro con los mismos ajustes.", "invalid": "{link}: {error}", "status": "Añadiendo {current} de {total}...", "someFailed": "No se pudieron añadir estos enlaces: {links}" },
   "uploadFile": "Subir un archivo de video",
   "upload": "Subir",
   "defaultTemplate": "Predeterminado",

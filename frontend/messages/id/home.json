@@ -29,6 +29,7 @@
   "removeFile": "Hapus file",
   "youtubeUrl": "URL YouTube, Twitch, atau Kick",
   "urlPlaceholder": "Tempel tautan VOD/clip YouTube, Twitch, atau Kick",
+"queue": { "chip": "Antrekan VOD lainnya", "label": "Tautan lain untuk diantrekan", "placeholder": "Tempel tautan lain, satu per baris. Diproses bergantian dengan pengaturan yang sama.", "invalid": "{link}: {error}", "status": "Mengantrekan {current} dari {total}...", "someFailed": "Tautan ini tidak bisa diantrekan: {links}" },
   "uploadFile": "Unggah file video",
   "upload": "Unggah",
   "defaultTemplate": "Bawaan",
