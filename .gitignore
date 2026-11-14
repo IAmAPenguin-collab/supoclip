@@ -25,3 +25,6 @@ docs/youtube-provider-registry*.json
 
 # Local agent checkouts
 .claude/worktrees/
+
+# Auto-exported clips (AUTO_EXPORT_HOST_DIR default)
+/exports/

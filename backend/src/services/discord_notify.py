@@ -40,6 +40,7 @@ def build_message(
     error: Optional[str] = None,
     queued_after: int = 0,
     minutes: Optional[float] = None,
+    exported_to: Optional[str] = None,
 ) -> dict:
     """The webhook payload; kept separate so it can be tested without a network."""
     name = (title or "Your video").strip()[:200]
@@ -54,6 +55,8 @@ def build_message(
         fields.append({"name": "Took", "value": f"{minutes:.0f} min", "inline": True})
     if queued_after:
         fields.append({"name": "Still in queue", "value": str(queued_after), "inline": True})
+    if exported_to:
+        fields.append({"name": "Saved to", "value": exported_to[:200], "inline": False})
     return {
         "username": "SupoClip",
         "embeds": [

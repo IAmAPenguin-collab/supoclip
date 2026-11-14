@@ -39,7 +39,7 @@ from .email_previews import (
     clip_preview,
     source_preview,
 )
-from . import discord_notify
+from . import auto_export, discord_notify
 from .task_completion_email_service import (
     TaskCompletionEmailService,
     TaskCompletionRecipient,
@@ -968,12 +968,14 @@ class TaskService(ClipEditingMixin):
                 workflow=spec.workflow,
                 topic=spec.options.topic,
             )
+            exported_to = await self._auto_export(task_id)
             await self._notify_discord(
                 task_id=task_id,
                 user_id=user_id,
                 succeeded=True,
                 clips_count=len(clip_ids),
                 started_at=started_at,
+                exported_to=exported_to,
             )
 
             capture_event(
@@ -1207,6 +1209,7 @@ class TaskService(ClipEditingMixin):
         clips_count: int = 0,
         error: Optional[str] = None,
         started_at: Optional[datetime] = None,
+        exported_to: Optional[str] = None,
     ) -> None:
         """Tell DISCORD_TASK_WEBHOOK_URL how a task ended. Never raises."""
         if not discord_notify.webhook_url():
@@ -1235,7 +1238,31 @@ class TaskService(ClipEditingMixin):
             error=error,
             queued_after=queued_after,
             minutes=seconds / 60 if seconds is not None else None,
+            exported_to=exported_to,
         )
+
+    async def _auto_export(self, task_id: str) -> Optional[str]:
+        """Copy the clips to AUTO_EXPORT_DIR; returns the folder name. Never raises."""
+        root = auto_export.export_dir()
+        if root is None:
+            return None
+        try:
+            context = await self.task_repo.get_task_notification_context(self.db, task_id)
+            clips = await self.clip_repo.get_clips_by_task(self.db, task_id)
+            folder, saved = await run_in_thread(
+                auto_export.export_task_clips,
+                root=root,
+                task_id=task_id,
+                title=(context or {}).get("source_title"),
+                clips=clips,
+            )
+        except Exception:
+            logger.exception("Auto-export failed for task %s", task_id)
+            return None
+        if folder is None or not saved:
+            return None
+        logger.info("Auto-exported %d clips of task %s to %s", saved, task_id, folder)
+        return folder.name
 
     async def _completion_email_wanted(self, task_id: str) -> bool:
         """Whether a completion email will go out, so clip stills are worth taking."""
