@@ -28,6 +28,9 @@ services:
         - POSTHOG_PROJECT_ID=${POSTHOG_PROJECT_ID:-}
         - POSTHOG_RELEASE_VERSION=${POSTHOG_RELEASE_VERSION:-}
     container_name: supoclip-frontend
+    # Apply database migrations before the dev server starts (AUTO_MIGRATE=false
+    # skips it). The production image has no pnpm and keeps its own command.
+    command: ["sh", "-c", "if command -v pnpm >/dev/null 2>&1; then sh prisma/migrate-on-start.sh; pnpm exec prisma generate && exec pnpm run dev; else exec node --require ./server-request-timeout.cjs server.js; fi"]
     ports:
       # Keep the legacy port for deployments whose proxy already uses 3001.
       # .env.example selects 3107 for new self-hosted installations.
@@ -40,6 +43,7 @@ services:
       - ./CHANGELOG.md:/app/CHANGELOG.md:ro
     environment:
       - NODE_ENV=${NODE_ENV:-development}
+      - AUTO_MIGRATE=${AUTO_MIGRATE:-true}
       - NEXT_TELEMETRY_DISABLED=1
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
       - BACKEND_INTERNAL_URL=http://backend:8000
