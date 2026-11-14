@@ -663,6 +663,11 @@ def _build_transcript_model(
     )
 
 
+def _is_free_openrouter_model(model_id: str) -> bool:
+    model_id = model_id.strip().lower()
+    return model_id.endswith(":free") or model_id == "openrouter/free"
+
+
 def _build_single_model(runtime_config: Config, model_name: str) -> Model | str:
     provider, provider_model_name = _split_llm_name(model_name)
     if provider == "anthropic" and _uses_native_output(model_name):
@@ -686,13 +691,27 @@ def _build_single_model(runtime_config: Config, model_name: str) -> Model | str:
         profile = OpenRouterProvider.model_profile(provider_model_name).update(
             OpenAIModelProfile(supports_json_schema_output=True)
         )
+        # A free model must never fall through to a paid one: OpenRouter would
+        # bill the backup without warning once the account has credits.
+        if _is_free_openrouter_model(provider_model_name) and not _is_free_openrouter_model(fallback):
+            logger.info(
+                "OpenRouter model %s is free; using openrouter/free instead of paid backup %s",
+                provider_model_name,
+                fallback,
+            )
+            fallback = "openrouter/free"
+        # Free endpoints usually log prompts, so "deny" leaves them with no
+        # provider at all. OPENROUTER_DATA_COLLECTION=allow lets them answer.
+        data_collection = (os.getenv("OPENROUTER_DATA_COLLECTION") or "deny").strip().lower()
+        if data_collection not in {"allow", "deny"}:
+            data_collection = "deny"
         return OpenRouterModel(
             provider_model_name,
             provider=OpenRouterProvider(api_key=runtime_config.openrouter_api_key),
             profile=profile,
             settings={
                 "openrouter_models": [fallback] if fallback != provider_model_name else [],
-                "openrouter_provider": {"allow_fallbacks": True, "require_parameters": True, "data_collection": "deny"},
+                "openrouter_provider": {"allow_fallbacks": True, "require_parameters": True, "data_collection": data_collection},
                 "openrouter_reasoning": {"effort": "low"},
                 "max_tokens": 8192,
             },
