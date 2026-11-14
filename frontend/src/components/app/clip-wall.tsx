@@ -16,7 +16,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { getClipUrl } from "@/lib/clip-actions";
 import { formatClipDuration } from "@/lib/generations";
 import { DELAY_MESSAGE_KEYS, isDownloadRecovery } from "@/lib/download-recovery";
-import { estimateRemainingSeconds, type EtaPhase } from "@/lib/processing-eta";
+import { estimateRemainingSeconds, type EtaPhase, type EtaProfile } from "@/lib/processing-eta";
 import { cn } from "@/lib/utils";
 import { SINGLE_OUTPUT, type SourceRange, type Workflow, type WorkflowClipFields } from "@/lib/workflows";
 
@@ -347,6 +347,23 @@ function stepHue(step: number) {
 }
 
 /** Seconds since `since`, ticking every few seconds. */
+// One request per page load: the machine's speed does not change mid-run.
+let etaProfileRequest: Promise<EtaProfile | null> | null = null;
+
+function useEtaProfile(enabled: boolean) {
+  const [profile, setProfile] = useState<EtaProfile | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    let active = true;
+    etaProfileRequest ??= fetch("/api/eta-profile", { cache: "no-store" })
+      .then((response) => (response.ok ? (response.json() as Promise<EtaProfile>) : null))
+      .catch(() => null);
+    void etaProfileRequest.then((value) => { if (active) setProfile(value); });
+    return () => { active = false; };
+  }, [enabled]);
+  return profile;
+}
+
 function useElapsed(since: number | undefined) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -415,6 +432,7 @@ export function ProcessingPanel({ status, progress, message, phaseSince, sourceS
   const currentClip = phase === "render" ? clip?.current ?? 1 : undefined;
   const clock = usePhaseClock(`${status}:${phase}:${currentClip ?? ""}`, currentClip, phaseSince);
   const phaseElapsed = useElapsed(remainingSeconds === undefined ? clock.since : undefined);
+  const etaProfile = useEtaProfile(remainingSeconds === undefined);
   const remaining = remainingSeconds ?? estimateRemainingSeconds({
     phase,
     phaseElapsed,
@@ -424,6 +442,7 @@ export function ProcessingPanel({ status, progress, message, phaseSince, sourceS
     outputs: clip?.total ?? outputs ?? 1,
     currentClip,
     observedSecondsPerClip: clock.perClip,
+    profile: etaProfile,
   });
   const eta = recovery ? t("recovery.heading")
     : status === "queued" ? t("eta.queued")

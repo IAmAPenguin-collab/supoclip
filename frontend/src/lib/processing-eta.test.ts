@@ -60,4 +60,22 @@ describe("estimateRemainingSeconds", () => {
   it("assumes a typical source when the length is unknown", () => {
     expect(estimateRemainingSeconds(youtube({ phase: "fetch", sourceSeconds: null }))).toBeGreaterThan(60);
   });
+
+  // A 6h12m Twitch VOD on a desktop CPU (faster-whisper + local Gemma) took
+  // ~75 min to transcribe and ~3.5 h to find clips.
+  it("uses this machine's speed when the server reports one", () => {
+    const vod = { phase: "transcribe" as const, sourceSeconds: 22339, outputs: 20 };
+    const local = estimateRemainingSeconds(youtube({
+      ...vod,
+      profile: { transcribe_seconds_per_minute: 12.5, find_seconds_per_minute: 34 },
+    }));
+    expect(local / 3600).toBeGreaterThan(4);
+    expect(local / 3600).toBeLessThan(6);
+    expect(estimateRemainingSeconds(youtube(vod))).toBeLessThan(local / 5);
+  });
+
+  it("keeps the built-in rates for values the server leaves out", () => {
+    const base = estimateRemainingSeconds(youtube({ phase: "transcribe" }));
+    expect(estimateRemainingSeconds(youtube({ phase: "transcribe", profile: { find_seconds_per_minute: null } }))).toBe(base);
+  });
 });

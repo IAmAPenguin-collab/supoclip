@@ -382,6 +382,14 @@ async def get_broll_status():
     }
 
 
+@router.get("/eta-profile")
+async def get_eta_profile():
+    """How fast this deployment transcribes and finds clips, for time-left estimates."""
+    from ...eta_profile import eta_profile
+
+    return eta_profile()
+
+
 def _idempotency_key(request: Request) -> str | None:
     raw = request.headers.get("idempotency-key")
     if raw is None or not raw.strip():

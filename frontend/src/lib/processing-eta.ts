@@ -17,6 +17,17 @@ const PHASES: readonly EtaPhase[] = ["fetch", "transcribe", "find", "sections", 
 /** Used when the source length is unknown: a typical 15-minute video. */
 const DEFAULT_SOURCE_SECONDS = 900;
 
+/**
+ * How fast this deployment works, from GET /api/eta-profile. The rates above
+ * suit the hosted service; local Whisper and a local model on CPU are 20-80x
+ * slower. A missing or null value keeps the built-in rate.
+ */
+export interface EtaProfile {
+  transcribe_seconds_per_minute?: number | null;
+  find_seconds_per_minute?: number | null;
+  render_seconds_per_clip?: number | null;
+}
+
 export interface EtaInput {
   phase: EtaPhase;
   /** Seconds since the current phase (or, while rendering, the current clip) started. */
@@ -31,6 +42,8 @@ export interface EtaInput {
   currentClip?: number;
   /** Measured seconds per clip in this run, once one has finished. */
   observedSecondsPerClip?: number | null;
+  /** This machine's speed; omitted means the hosted service's. */
+  profile?: EtaProfile | null;
 }
 
 /** Median render time of one output: parts and single cuts run longer than highlights. */
@@ -44,9 +57,9 @@ function phaseSeconds(phase: Exclude<EtaPhase, "render">, input: EtaInput) {
   const minutes = (input.sourceSeconds && input.sourceSeconds > 0 ? input.sourceSeconds : DEFAULT_SOURCE_SECONDS) / 60;
   switch (phase) {
     case "fetch": return input.upload ? 6 : 22;
-    case "transcribe": return 11 + 0.62 * minutes;
+    case "transcribe": return 11 + (input.profile?.transcribe_seconds_per_minute || 0.62) * minutes;
     // Workflows plan with several model calls before any cut.
-    case "find": return (input.workflow === "highlights" ? 7 : 30) + 0.43 * minutes;
+    case "find": return (input.workflow === "highlights" ? 7 : 30) + (input.profile?.find_seconds_per_minute || 0.43) * minutes;
     case "sections": return input.upload ? 0 : 85 + 5.9 * minutes;
   }
 }
@@ -62,7 +75,7 @@ function leftOf(expected: number, elapsed: number) {
 }
 
 export function estimateRemainingSeconds(input: EtaInput) {
-  const perClip = input.observedSecondsPerClip || secondsPerClip(input.workflow);
+  const perClip = input.observedSecondsPerClip || input.profile?.render_seconds_per_clip || secondsPerClip(input.workflow);
   const outputs = Math.max(1, input.outputs);
   if (input.phase === "render") {
     const current = Math.min(Math.max(1, input.currentClip ?? 1), outputs);
