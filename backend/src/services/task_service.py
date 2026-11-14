@@ -39,6 +39,7 @@ from .email_previews import (
     clip_preview,
     source_preview,
 )
+from . import discord_notify
 from .task_completion_email_service import (
     TaskCompletionEmailService,
     TaskCompletionRecipient,
@@ -967,6 +968,13 @@ class TaskService(ClipEditingMixin):
                 workflow=spec.workflow,
                 topic=spec.options.topic,
             )
+            await self._notify_discord(
+                task_id=task_id,
+                user_id=user_id,
+                succeeded=True,
+                clips_count=len(clip_ids),
+                started_at=started_at,
+            )
 
             capture_event(
                 "task_completed",
@@ -1080,6 +1088,13 @@ class TaskService(ClipEditingMixin):
                     await progress_callback(0, failure_message, "error")
                 except Exception:
                     logger.exception("Could not publish task failure for %s", task_id)
+            await self._notify_discord(
+                task_id=task_id,
+                user_id=user_id,
+                succeeded=False,
+                error=failure_message,
+                started_at=started_at,
+            )
             raise
         finally:
             await run_in_thread(self._cleanup_source_video, video_path, source_type, url)
@@ -1182,6 +1197,45 @@ class TaskService(ClipEditingMixin):
                 "Failed to send completion notification for task %s",
                 task_id,
             )
+
+    async def _notify_discord(
+        self,
+        *,
+        task_id: str,
+        user_id: Optional[str],
+        succeeded: bool,
+        clips_count: int = 0,
+        error: Optional[str] = None,
+        started_at: Optional[datetime] = None,
+    ) -> None:
+        """Tell DISCORD_TASK_WEBHOOK_URL how a task ended. Never raises."""
+        if not discord_notify.webhook_url():
+            return
+        title = None
+        queued_after = 0
+        try:
+            context = await self.task_repo.get_task_notification_context(self.db, task_id)
+            title = (context or {}).get("source_title")
+        except Exception:
+            logger.warning("No title for Discord notification of task %s", task_id, exc_info=True)
+        if user_id:
+            try:
+                from ..workers.video_admission import queued_video_tasks
+
+                queued_after = len(await queued_video_tasks(self.db, user_id))
+            except Exception:
+                logger.warning("Could not count queued tasks for %s", task_id, exc_info=True)
+        seconds = elapsed_seconds(started_at) if started_at else None
+        await discord_notify.notify_task_finished(
+            task_id=task_id,
+            app_base_url=self.config.app_base_url,
+            title=title,
+            succeeded=succeeded,
+            clips_count=clips_count,
+            error=error,
+            queued_after=queued_after,
+            minutes=seconds / 60 if seconds is not None else None,
+        )
 
     async def _completion_email_wanted(self, task_id: str) -> bool:
         """Whether a completion email will go out, so clip stills are worth taking."""
