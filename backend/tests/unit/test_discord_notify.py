@@ -67,3 +67,22 @@ async def test_a_webhook_error_never_reaches_the_task(monkeypatch):
     )
     assert len(sent) == 1
     assert sent[0].url.host == "discord.invalid"
+
+
+def test_the_fallback_alert_names_the_local_model_and_links_the_task():
+    payload = discord_notify.build_fallback_message(
+        task_id="t3", app_base_url="http://localhost:3107", title="VOD", model_name="gemma4:12b"
+    )
+    embed = payload["embeds"][0]
+    assert embed["title"] == "Switched to gemma4:12b: VOD"
+    assert embed["url"] == "http://localhost:3107/tasks/t3"
+    assert "free daily quota" in embed["description"]
+    assert payload["allowed_mentions"] == {"parse": []}
+
+
+def test_the_finished_message_lists_the_models_that_answered():
+    payload = discord_notify.build_message(
+        task_id="t", app_base_url="http://x", title="v", succeeded=True, clips_count=3,
+        models="gemini-3.6-flash ×30 · gemma4:12b ×8",
+    )
+    assert {"name": "AI models", "value": "gemini-3.6-flash ×30 · gemma4:12b ×8", "inline": False} in payload["embeds"][0]["fields"]

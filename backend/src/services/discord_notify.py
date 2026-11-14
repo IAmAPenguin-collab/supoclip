@@ -41,6 +41,7 @@ def build_message(
     queued_after: int = 0,
     minutes: Optional[float] = None,
     exported_to: Optional[str] = None,
+    models: Optional[str] = None,
 ) -> dict:
     """The webhook payload; kept separate so it can be tested without a network."""
     name = (title or "Your video").strip()[:200]
@@ -55,6 +56,8 @@ def build_message(
         fields.append({"name": "Took", "value": f"{minutes:.0f} min", "inline": True})
     if queued_after:
         fields.append({"name": "Still in queue", "value": str(queued_after), "inline": True})
+    if models:
+        fields.append({"name": "AI models", "value": models[:200], "inline": False})
     if exported_to:
         fields.append({"name": "Saved to", "value": exported_to[:200], "inline": False})
     return {
@@ -74,13 +77,50 @@ def build_message(
     }
 
 
+COLOR_WARNING = 0xF59E0B
+
+
+def build_fallback_message(
+    *, task_id: str, app_base_url: str, title: Optional[str], model_name: str
+) -> dict:
+    """Sent once per task when a local model answers a cloud-first chain."""
+    name = (title or "Your video").strip()[:200]
+    return {
+        "username": "SupoClip",
+        "embeds": [
+            {
+                "title": f"Switched to {model_name}: {name}",
+                "url": _task_link(app_base_url, task_id),
+                "description": (
+                    "The cloud model did not answer (most often its free daily quota is "
+                    "used up), so clip picking continues on this PC. The rest of this "
+                    "video will be much slower. The cloud model is tried again on every "
+                    "request, so it takes over again by itself once it answers."
+                ),
+                "color": COLOR_WARNING,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        ],
+        "allowed_mentions": {"parse": []},
+    }
+
+
+async def notify_fallback(**kwargs) -> None:
+    """Send the switched-to-local alert if a webhook is configured. Never raises."""
+    await _send(build_fallback_message, kwargs)
+
+
 async def notify_task_finished(**kwargs) -> None:
     """Send the message if a webhook is configured. Never raises."""
+    await _send(build_message, kwargs)
+
+
+async def _send(build, kwargs: dict) -> None:
     url = webhook_url()
     if not url:
         return
     try:
-        payload = build_message(**kwargs)
+        payload = build(**kwargs)
         async with httpx.AsyncClient(timeout=POST_TIMEOUT_SECONDS) as client:
             response = await client.post(url, json=payload)
         if response.status_code >= 400:

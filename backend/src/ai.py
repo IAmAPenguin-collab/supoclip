@@ -4,6 +4,9 @@ AI-related functions for transcript analysis with enhanced precision and viralit
 
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Literal
+from collections import Counter
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 import asyncio
 import logging
 import math
@@ -61,6 +64,61 @@ _CHAIN_HAS_LOCAL = any(name.startswith("ollama:") for name in _llm_chain())
 
 def _ai_default(cloud: int, local: int) -> int:
     return local if _CHAIN_HAS_LOCAL else cloud
+
+
+_LOCAL_MODEL_NAMES = {
+    name.split(":", 1)[1] for name in _llm_chain() if name.startswith("ollama:")
+}
+
+
+@dataclass
+class ModelUsage:
+    """Which model answered each AI request of one task.
+
+    The task sets it on ``model_usage`` before processing; asyncio copies the
+    context into the analysis tasks, which all add to this same object.
+    """
+
+    task_id: str
+    title: Optional[str] = None
+    answered: Counter = field(default_factory=Counter)
+    fallback_alerted: bool = False
+    pending: set = field(default_factory=set)
+
+    def summary(self) -> str:
+        return " · ".join(f"{name} ×{count}" for name, count in self.answered.most_common())
+
+    @property
+    def local_answers(self) -> int:
+        return sum(count for name, count in self.answered.items() if name.lower() in _LOCAL_MODEL_NAMES)
+
+
+model_usage: ContextVar[Optional[ModelUsage]] = ContextVar("model_usage", default=None)
+
+
+def _record_model_answer(model_name: Optional[str]) -> None:
+    usage = model_usage.get()
+    if usage is None or not model_name:
+        return
+    usage.answered[model_name] += 1
+    # A cloud-first chain answered locally: Gemini is out of quota or down.
+    # Say so once, now, since the rest of the run will be much slower.
+    if usage.fallback_alerted or _PRIMARY_IS_LOCAL or model_name.lower() not in _LOCAL_MODEL_NAMES:
+        return
+    usage.fallback_alerted = True
+    logger.warning("Task %s: cloud model unavailable, %s took over", usage.task_id, model_name)
+    from .services import discord_notify
+
+    alert = asyncio.ensure_future(
+        discord_notify.notify_fallback(
+            task_id=usage.task_id,
+            app_base_url=get_config().app_base_url,
+            title=usage.title,
+            model_name=model_name,
+        )
+    )
+    usage.pending.add(alert)
+    alert.add_done_callback(usage.pending.discard)
 
 
 TRANSCRIPT_ANALYSIS_TIMEOUT_SECONDS = _env_int(
@@ -640,10 +698,22 @@ def _build_single_model(runtime_config: Config, model_name: str) -> Model | str:
             },
         )
     if provider in {"google", "google-gla"} and provider_model_name:
+        # Gemini's default is its highest thinking level: ~1,300 hidden tokens
+        # even for a one-line question, all counted against the free quota.
+        # GEMINI_THINKING_LEVEL=minimal|low|medium|high; unset keeps Google's.
+        thinking_level = os.getenv("GEMINI_THINKING_LEVEL", "").strip().lower()
+        if thinking_level not in {"", "minimal", "low", "medium", "high"}:
+            logger.warning("Ignoring GEMINI_THINKING_LEVEL=%s", thinking_level)
+            thinking_level = ""
         # A busy free-tier Gemini can hang instead of answering 503. A short
         # timeout lets the fallback take over instead of waiting 10 minutes.
         return GoogleModel(
             provider_model_name,
+            settings=(
+                {"google_thinking_config": {"thinking_level": thinking_level.upper()}}
+                if thinking_level
+                else None
+            ),
             provider=GoogleProvider(
                 api_key=runtime_config.google_api_key,
                 http_client=httpx.AsyncClient(
@@ -1266,6 +1336,7 @@ async def _run_transcript_analysis(
                     result = await agent.run(prompt)
                     if hasattr(result, "response"):
                         logger.info("AI analysis completed using model %s", result.response.model_name)
+                        _record_model_answer(result.response.model_name)
                     return result
                 except Exception as error:
                     if not _is_transient_model_error(error):

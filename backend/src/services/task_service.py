@@ -50,7 +50,7 @@ from ..youtube_proxy import YouTubeGeoRestrictedError
 from ..youtube_source import load_time_map, localize_segment, restore_clip_timeline, transcript_source_for
 from ..clip_cleanup import normalize_clip_cleanup_settings
 from ..clip_duration import clip_duration, validate_clip_length
-from ..ai import TRANSCRIPT_ANALYSIS_CACHE_VERSION
+from ..ai import TRANSCRIPT_ANALYSIS_CACHE_VERSION, ModelUsage, model_usage
 from ..clip_source_map import load_clip_caption_settings, normalize_source_ranges, source_range_bounds
 from ..media.timeline import seconds_to_mmss
 from ..workflows.boundaries import cleanup_key
@@ -509,6 +509,9 @@ class TaskService(ClipEditingMixin):
         # For the task_completed / task_failed product events.
         started_at: Optional[datetime] = None
         cache_hit: Optional[bool] = None
+        # Which AI model answered each request, for the Discord messages.
+        ai_usage = ModelUsage(task_id=task_id)
+        model_usage.set(ai_usage)
 
         async def check_cancelled():
             if should_cancel and await should_cancel():
@@ -520,6 +523,7 @@ class TaskService(ClipEditingMixin):
             # What to make is read from the task, so queued jobs and resumes
             # honour it with the ARQ job arguments unchanged.
             task_row = await self.task_repo.get_task_by_id(self.db, task_id) or {}
+            ai_usage.title = task_row.get("source_title")
             spec = workflow_spec_from_task(task_row, clip_length)
             prior_outputs = bool(await self.clip_repo.get_clips_by_task(self.db, task_id))
             # New tasks already have an atomic acceptance charge. Recover queued
@@ -976,6 +980,7 @@ class TaskService(ClipEditingMixin):
                 clips_count=len(clip_ids),
                 started_at=started_at,
                 exported_to=exported_to,
+                models=ai_usage.summary() or None,
             )
 
             capture_event(
@@ -1096,6 +1101,7 @@ class TaskService(ClipEditingMixin):
                 succeeded=False,
                 error=failure_message,
                 started_at=started_at,
+                models=ai_usage.summary() or None,
             )
             raise
         finally:
@@ -1210,6 +1216,7 @@ class TaskService(ClipEditingMixin):
         error: Optional[str] = None,
         started_at: Optional[datetime] = None,
         exported_to: Optional[str] = None,
+        models: Optional[str] = None,
     ) -> None:
         """Tell DISCORD_TASK_WEBHOOK_URL how a task ended. Never raises."""
         if not discord_notify.webhook_url():
@@ -1239,6 +1246,7 @@ class TaskService(ClipEditingMixin):
             queued_after=queued_after,
             minutes=seconds / 60 if seconds is not None else None,
             exported_to=exported_to,
+            models=models,
         )
 
     async def _auto_export(self, task_id: str) -> Optional[str]:
