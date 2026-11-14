@@ -191,9 +191,12 @@ _FASTER_WHISPER_MODEL_CACHE: Dict[str, Any] = {}
 
 
 def _whisper_engine() -> str:
-    """WHISPER_ENGINE: "openai" (default, openai-whisper) or "faster" (faster-whisper)."""
-    engine = (os.getenv("WHISPER_ENGINE") or "openai").strip().lower()
-    return "faster" if engine in {"faster", "faster-whisper", "faster_whisper"} else "openai"
+    """WHISPER_ENGINE: "faster" (default, faster-whisper) or "openai" (openai-whisper).
+
+    faster-whisper gives the same output about 5x faster on CPU (int8, VAD).
+    """
+    engine = (os.getenv("WHISPER_ENGINE") or "faster").strip().lower()
+    return "openai" if engine in {"openai", "openai-whisper", "openai_whisper"} else "faster"
 
 
 def _get_faster_whisper_model(model_name: str):

@@ -39,7 +39,8 @@ def _slot_ttl_seconds() -> int:
     A slot that expired mid-render would let the next queued video start on
     top of it, which on a CPU-only machine slows both to a crawl.
     """
-    return max(SLOT_TTL_SECONDS, get_config().processing_task_timeout_seconds + 3600)
+    fail_safe = getattr(get_config(), "processing_task_timeout_seconds", 0) or 0
+    return max(SLOT_TTL_SECONDS, int(fail_safe) + 3600)
 
 UPLOAD_WAIT_KEY = "upload_wait:{task_id}"
 UPLOAD_WAIT_MESSAGE = "Saving your upload..."

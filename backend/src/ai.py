@@ -46,9 +46,26 @@ def _env_int(name: str, default: int) -> int:
     return int(value) if value else default
 
 
-# The defaults suit cloud models. A local model on CPU needs far longer:
-# raise these with the AI_* environment variables below.
-TRANSCRIPT_ANALYSIS_TIMEOUT_SECONDS = _env_int("AI_WINDOW_TIMEOUT_SECONDS", 600)
+def _llm_chain() -> list[str]:
+    names = [os.getenv("LLM", "")] + os.getenv("LLM_FALLBACK", "").split(",")
+    return [name.strip().lower() for name in names if name.strip()]
+
+
+# A local model on CPU is 20-50x slower than a cloud one. When Ollama is the
+# primary model, or a fallback a run might end on, the defaults below allow
+# for that; a cloud-only chain keeps the original, tighter ones. Every value
+# can still be set with its AI_* environment variable.
+_PRIMARY_IS_LOCAL = bool(_llm_chain()) and _llm_chain()[0].startswith("ollama:")
+_CHAIN_HAS_LOCAL = any(name.startswith("ollama:") for name in _llm_chain())
+
+
+def _ai_default(cloud: int, local: int) -> int:
+    return local if _CHAIN_HAS_LOCAL else cloud
+
+
+TRANSCRIPT_ANALYSIS_TIMEOUT_SECONDS = _env_int(
+    "AI_WINDOW_TIMEOUT_SECONDS", _ai_default(600, 1500)
+)
 # Long transcripts are analysed in overlapping windows so every part of the
 # source gets the model's full attention; candidates are then reranked together.
 ANALYSIS_WINDOW_SECONDS = 12 * 60
@@ -56,14 +73,20 @@ ANALYSIS_WINDOW_OVERLAP_SECONDS = 2 * 60
 ANALYSIS_SINGLE_WINDOW_MAX_SECONDS = 15 * 60
 # A local Ollama answers one request at a time; queued windows would burn
 # their own timeout while waiting, so use 1 there.
-ANALYSIS_WINDOW_CONCURRENCY = max(1, _env_int("AI_WINDOW_CONCURRENCY", 3))
+ANALYSIS_WINDOW_CONCURRENCY = max(
+    1,
+    _env_int(
+        "AI_WINDOW_CONCURRENCY",
+        1 if _PRIMARY_IS_LOCAL else (2 if _CHAIN_HAS_LOCAL else 3),
+    ),
+)
 ANALYSIS_WINDOW_SEGMENT_TARGET = "3-5"
 # Wall-clock budget for all windows together. Each window additionally keeps
 # its own TRANSCRIPT_ANALYSIS_TIMEOUT_SECONDS budget once it starts running.
-ANALYSIS_TOTAL_TIMEOUT_SECONDS = _env_int("AI_TOTAL_TIMEOUT_SECONDS", 1800)
-RERANK_TIMEOUT_SECONDS = _env_int("AI_RERANK_TIMEOUT_SECONDS", 240)
+ANALYSIS_TOTAL_TIMEOUT_SECONDS = _env_int("AI_TOTAL_TIMEOUT_SECONDS", _ai_default(1800, 21600))
+RERANK_TIMEOUT_SECONDS = _env_int("AI_RERANK_TIMEOUT_SECONDS", _ai_default(240, 1800))
 # One HTTP request to the model. pydantic-ai's own default is 600s.
-AI_HTTP_TIMEOUT_SECONDS = _env_int("AI_HTTP_TIMEOUT_SECONDS", 600)
+AI_HTTP_TIMEOUT_SECONDS = _env_int("AI_HTTP_TIMEOUT_SECONDS", _ai_default(600, 1500))
 CANDIDATE_DEDUPE_OVERLAP_RATIO = 0.5
 # How far a model timestamp may sit from a transcript line boundary and still be
 # snapped onto it instead of the whole clip being dropped.
