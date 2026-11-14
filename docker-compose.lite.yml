@@ -1,0 +1,48 @@
+# Lite mode: the same app with about 1.4 GB less RAM, for a CPU-only PC.
+#
+# Turn it on by adding this line to .env, then `docker compose up -d --build`:
+#   COMPOSE_FILE=docker-compose.yml;docker-compose.lite.yml     (Windows)
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.lite.yml     (Linux, macOS)
+#
+# What changes:
+# - The frontend runs Next.js's production build (~150-300 MB) instead of the
+#   dev server with hot reload (~1.5 GB). Edits to frontend/src need a rebuild
+#   (`docker compose up -d --build frontend`) to show up.
+# - Database migrations run in a one-shot `frontend-migrate` container that
+#   exits before the frontend starts (the production image has no Prisma CLI).
+# - mcp (the MCP server for AI clients such as Claude Desktop) and ai-worker
+#   (the AI editor, which needs ANTHROPIC_API_KEY) are not started. Run them
+#   anyway with `docker compose --profile full up -d`.
+
+services:
+  frontend-migrate:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      target: development
+    container_name: supoclip-frontend-migrate
+    command: ["sh", "prisma/migrate-on-start.sh"]
+    volumes:
+      - ./frontend/prisma:/app/prisma
+    environment:
+      - AUTO_MIGRATE=${AUTO_MIGRATE:-true}
+      - DATABASE_URL=postgresql://supoclip:supoclip_password@postgres:5432/supoclip
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  frontend:
+    build:
+      target: runner
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      frontend-migrate:
+        condition: service_completed_successfully
+
+  mcp:
+    profiles: ["full"]
+
+  ai-worker:
+    profiles: ["full"]
