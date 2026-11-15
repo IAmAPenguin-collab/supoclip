@@ -134,6 +134,7 @@
   },
   "clipOf": "第 {current} / {total} 个片段",
   "leavePage": "可以离开此页面——片段完成后会保存在你的素材库中。",
+"live": { "label": "当前正在进行", "stepFor": "{step}已进行 {elapsed}", "lastUpdate": "上次更新于 {ago} 前", "quiet": "暂时没有新消息：这一部分完成后才会汇报。本地 AI 模型每个片段可能需要几分钟。" },
   "sourceLength": "源视频 {duration}",
   "percentComplete": "已完成 {progress}%",
   "transcript": {

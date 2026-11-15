@@ -134,6 +134,7 @@
   },
   "clipOf": "Clip {current} dari {total}",
   "leavePage": "Kamu boleh meninggalkan halaman ini — clip-mu akan menunggu di pustaka.",
+"live": { "label": "Yang sedang dikerjakan", "stepFor": "{step} selama {elapsed}", "lastUpdate": "pembaruan terakhir {ago} lalu", "quiet": "Belum ada kabar sebentar: bagian ini melapor saat selesai. Model AI lokal bisa butuh beberapa menit per bagian." },
   "sourceLength": "Video sumber {duration}",
   "percentComplete": "{progress}% selesai",
   "transcript": {

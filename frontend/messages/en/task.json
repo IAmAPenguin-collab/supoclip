@@ -134,6 +134,7 @@
   },
   "clipOf": "Clip {current} of {total}",
   "leavePage": "You can leave this page — your clips will be waiting in your library.",
+"live": { "label": "What it is doing right now", "stepFor": "{step} for {elapsed}", "lastUpdate": "last update {ago} ago", "quiet": "No news for a while: this piece reports when it finishes. Local AI models can take several minutes per section." },
   "sourceLength": "{duration} source",
   "percentComplete": "{progress}% complete",
   "transcript": {

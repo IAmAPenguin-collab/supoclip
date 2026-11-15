@@ -134,6 +134,7 @@
   },
   "clipOf": "Clip {current} de {total}",
   "leavePage": "Puedes salir de esta página — tus clips te esperarán en tu biblioteca.",
+"live": { "label": "Lo que está haciendo ahora", "stepFor": "{step} desde hace {elapsed}", "lastUpdate": "última actualización hace {ago}", "quiet": "Sin novedades por un rato: esta parte avisa al terminar. Los modelos de IA locales pueden tardar varios minutos por sección." },
   "sourceLength": "{duration} de video original",
   "percentComplete": "{progress}% completo",
   "transcript": {

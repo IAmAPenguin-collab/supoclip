@@ -134,6 +134,7 @@
   },
   "clipOf": "Clip {current} von {total}",
   "leavePage": "Du kannst die Seite verlassen — deine Clips warten in deiner Bibliothek.",
+"live": { "label": "Was gerade passiert", "stepFor": "{step} seit {elapsed}", "lastUpdate": "letztes Update vor {ago}", "quiet": "Eine Weile keine Neuigkeiten: Dieser Teil meldet sich, wenn er fertig ist. Lokale KI-Modelle brauchen mehrere Minuten pro Abschnitt." },
   "sourceLength": "{duration} Quellvideo",
   "percentComplete": "{progress}% fertig",
   "transcript": {

@@ -364,15 +364,49 @@ function useEtaProfile(enabled: boolean) {
   return profile;
 }
 
-function useElapsed(since: number | undefined) {
+function useElapsed(since: number | undefined, tickMs = 5000) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (since === undefined) return;
     setNow(Date.now());
-    const id = window.setInterval(() => setNow(Date.now()), 5000);
+    const id = window.setInterval(() => setNow(Date.now()), tickMs);
     return () => window.clearInterval(id);
-  }, [since]);
+  }, [since, tickMs]);
   return since === undefined ? 0 : Math.max(0, (now - since) / 1000);
+}
+
+/** When the progress message last changed, so the page can say "last update 4s ago". */
+function useMessageSince(message: string, initialSince: number | undefined) {
+  const [state, setState] = useState(() => ({ message, since: Math.min(initialSince ?? Date.now(), Date.now()) }));
+  useEffect(() => {
+    setState((prev) => (prev.message === message ? prev : { message, since: Date.now() }));
+  }, [message]);
+  return state.since;
+}
+
+/** 38s, 4m 05s, 1h 12m: matches the backend's live status wording. */
+export function formatElapsed(seconds: number) {
+  const total = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours) return `${hours}h ${String(minutes).padStart(2, "0")}m`;
+  if (minutes) return `${minutes}m ${String(secs).padStart(2, "0")}s`;
+  return `${secs}s`;
+}
+
+/** Messages older than this get a note that slow pieces only report when done. */
+const QUIET_AFTER_SECONDS = 90;
+
+/**
+ * Only the pipeline's own stage and live-status messages are shown word for
+ * word. Anything else (a provider's raw error, say) may carry private detail,
+ * so it stays hidden as before.
+ */
+const SHOWN_MESSAGE = /^(downloading |transcribing|generating transcript|preparing video|storing upload|analyzing content|picking clips|reading the whole video|creating (clip|part|recap|trailer) \d|mapping|planning|choosing|writing|checking|finding where)/i;
+
+export function isShownStatusMessage(message: string) {
+  return SHOWN_MESSAGE.test(message.trim());
 }
 
 /** The estimator's phase: step 2 also covers downloading the picked segments, the longest wait of a YouTube run. */
@@ -433,6 +467,10 @@ export function ProcessingPanel({ status, progress, message, phaseSince, sourceS
   const clock = usePhaseClock(`${status}:${phase}:${currentClip ?? ""}`, currentClip, phaseSince);
   const phaseElapsed = useElapsed(remainingSeconds === undefined ? clock.since : undefined);
   const etaProfile = useEtaProfile(remainingSeconds === undefined);
+  const live = status === "processing" && isShownStatusMessage(message) && !recovery && remainingSeconds === undefined;
+  const messageSince = useMessageSince(message, phaseSince);
+  const sinceUpdate = useElapsed(live ? messageSince : undefined, 1000);
+  const stepElapsed = useElapsed(live ? clock.since : undefined, 1000);
   const remaining = remainingSeconds ?? estimateRemainingSeconds({
     phase,
     phaseElapsed,
@@ -463,6 +501,21 @@ export function ProcessingPanel({ status, progress, message, phaseSince, sourceS
         <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2.5 text-sm" role="status" aria-label={t("recovery.heading")}>
           <Loader2 aria-hidden className="mt-0.5 size-4 shrink-0 animate-spin text-amber-700 dark:text-amber-400" />
           <p>{t(`recovery.messages.${delayMessage}`)}</p>
+        </div>
+      )}
+      {live && (
+        // No role="status": that marks the download-recovery notice. The section is already aria-live.
+        <div className="mt-3 rounded-lg border border-foreground/10 bg-foreground/[0.03] px-3 py-2.5" data-testid="live-status" title={t("live.label")}>
+          <p className="flex items-start gap-2 text-sm">
+            <Loader2 aria-hidden className="mt-0.5 size-4 shrink-0 animate-spin text-muted-foreground" />
+            <span className="min-w-0 break-words" data-testid="live-message">{message}</span>
+          </p>
+          <p className="mt-1 pl-6 text-xs tabular-nums text-muted-foreground">
+            {step >= 0 && t("live.stepFor", { step: stepLabel(t, workflow, STEPS[Math.min(step, STEPS.length - 1)].id), elapsed: formatElapsed(stepElapsed) })}
+            {step >= 0 && " · "}
+            {t("live.lastUpdate", { ago: formatElapsed(sinceUpdate) })}
+          </p>
+          {sinceUpdate > QUIET_AFTER_SECONDS && <p className="mt-1 pl-6 text-xs text-muted-foreground">{t("live.quiet")}</p>}
         </div>
       )}
       <div className="mt-4 h-2 rounded-full bg-stone-200/60 dark:bg-stone-800/60" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} aria-label={t("percentComplete", { progress })}>

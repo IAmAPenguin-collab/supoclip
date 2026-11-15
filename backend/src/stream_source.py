@@ -247,6 +247,14 @@ def _work_root() -> Path:
     return Path(get_config().temp_dir) / WORK_DIRNAME
 
 
+def stream_work_dir(task_id: str) -> Optional[Path]:
+    """Where this task's stream downloads land (for live progress), or None."""
+    try:
+        return _work_root() / _safe_component(task_id)
+    except ValueError:
+        return None
+
+
 def _operation(task_key: str, operation: str) -> _Operation:
     now = time.monotonic()
     with _operations_lock:

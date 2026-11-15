@@ -1619,6 +1619,13 @@ async def rerank_candidates(
     if len(candidates) < 2:
         return candidates
     try:
+        from . import live_status
+
+        await live_status.say(
+            64,
+            f"Picking clips: comparing all {len(candidates)} candidates to choose the best",
+            force=True,
+        )
         agent = get_rerank_agent()
         result = await _run_transcript_analysis(
             agent,
@@ -1651,24 +1658,58 @@ async def _analyze_transcript_windows(
 
     Raises the first window error only when no window produced an analysis.
     """
+    from . import live_status
+
     semaphore = asyncio.Semaphore(ANALYSIS_WINDOW_CONCURRENCY)
+    total = len(windows)
+    state = {"done": 0, "candidates": 0, "model": None}
+    reading: Dict[int, Dict[str, Any]] = {}
 
-    async def run_window(window: Dict[str, Any]) -> TranscriptAnalysis:
-        async with semaphore:
-            prompt = build_transcript_analysis_prompt(
-                transcript=window["transcript"],
-                clip_signals=_filter_clip_signals_for_window(
-                    clip_signals, window["start"], window["end"]
-                ),
-                window=(window["start"], window["end"]),
-                performance_context=performance_context,
-                clip_length=clip_length,
-                **({"instructions": instructions} if instructions else {}),
+    async def report(force: bool = False) -> None:
+        # e.g. "Picking clips: 14 of 37 sections read · reading 2h 48m-3h 00m ·
+        # 41 candidates so far · last answer from gemini-3.6-flash"
+        parts = [f"Picking clips: {state['done']} of {total} sections read"]
+        if reading:
+            spans = ", ".join(
+                f"{live_status.clock(w['start'])}-{live_status.clock(w['end'])}"
+                for _, w in sorted(reading.items())
             )
-            result = await _run_transcript_analysis(agent, prompt)
-            return result.output
+            parts.append(f"reading {spans}")
+        parts.append(f"{state['candidates']} candidates so far")
+        if state["model"]:
+            parts.append(f"last answer from {state['model']}")
+        await live_status.say(50 + int(15 * state["done"] / max(total, 1)), " · ".join(parts), force=force)
 
-    tasks = [asyncio.create_task(run_window(window)) for window in windows]
+    async def run_window(index: int, window: Dict[str, Any]) -> TranscriptAnalysis:
+        async with semaphore:
+            reading[index] = window
+            await report(force=state["done"] == 0 and len(reading) == 1)
+            try:
+                analysis = await _run_window_inner(window)
+            finally:
+                reading.pop(index, None)
+            state["done"] += 1
+            state["candidates"] += len(getattr(analysis, "most_relevant_segments", None) or [])
+            await report(force=state["done"] == total)
+            return analysis
+
+    async def _run_window_inner(window: Dict[str, Any]) -> TranscriptAnalysis:
+        prompt = build_transcript_analysis_prompt(
+            transcript=window["transcript"],
+            clip_signals=_filter_clip_signals_for_window(
+                clip_signals, window["start"], window["end"]
+            ),
+            window=(window["start"], window["end"]),
+            performance_context=performance_context,
+            clip_length=clip_length,
+            **({"instructions": instructions} if instructions else {}),
+        )
+        result = await _run_transcript_analysis(agent, prompt)
+        if hasattr(result, "response"):
+            state["model"] = result.response.model_name
+        return result.output
+
+    tasks = [asyncio.create_task(run_window(index, window)) for index, window in enumerate(windows)]
     try:
         _, pending = await asyncio.wait(tasks, timeout=ANALYSIS_TOTAL_TIMEOUT_SECONDS)
     except asyncio.CancelledError:

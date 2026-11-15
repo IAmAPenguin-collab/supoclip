@@ -183,3 +183,14 @@ async def feature_flag(db_session):
             )
     await db_session.commit()
     feature_flags_module.clear_cache()
+
+
+@pytest.fixture(autouse=True)
+def _no_real_notifications_or_exports(monkeypatch):
+    """Tests never post to a real Discord webhook or copy clips to a real folder.
+
+    A developer's .env reaches test containers; without this, tests that fail
+    a task would post "Clipping failed" messages to their actual channel.
+    """
+    monkeypatch.delenv("DISCORD_TASK_WEBHOOK_URL", raising=False)
+    monkeypatch.delenv("AUTO_EXPORT_DIR", raising=False)

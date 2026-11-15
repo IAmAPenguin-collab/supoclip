@@ -40,6 +40,7 @@ from .email_previews import (
     source_preview,
 )
 from . import auto_export, discord_notify
+from .. import live_status
 from .task_completion_email_service import (
     TaskCompletionEmailService,
     TaskCompletionRecipient,
@@ -630,6 +631,9 @@ class TaskService(ClipEditingMixin):
                 if progress_callback:
                     await progress_callback(progress, message, status)
 
+            # Live detail ("Creating clip 4/20: ...") from here and the pipeline.
+            live_status.install(update_progress)
+
             # Process video with progress updates
             max_video_duration = self.config.max_video_duration
             if source_type in {"youtube", "twitch", "kick"} and user_id:
@@ -788,6 +792,19 @@ class TaskService(ClipEditingMixin):
                 await update_progress(
                     clip_progress,
                     f"Creating {noun} {i + 1}/{total_clips}...",
+                )
+                # Then the detail. It keeps "Creating clip n/m" first, which
+                # the page reads the counter from.
+                hook = str(segment.get("hook_title") or "").strip()[:80]
+                start, end = segment.get("start_time"), segment.get("end_time")
+                details = [f"“{hook}”"] if hook else []
+                if start and end:
+                    details.append(f"{start}-{end} in the video")
+                await live_status.say(
+                    clip_progress,
+                    f"Creating {noun} {i + 1}/{total_clips}: "
+                    + " · ".join(details + ["cutting, framing and adding captions"]),
+                    force=True,
                 )
 
                 # A partial download is a concatenated timeline. Render against

@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import messages from "../../../messages/en/task.json";
 
-import { ClipFocus, ClipTile, ProcessingPanel, clipProgressFromMessage, type WallClip } from "./clip-wall";
+import { ClipFocus, ClipTile, ProcessingPanel, clipProgressFromMessage, formatElapsed, type WallClip } from "./clip-wall";
 import { GenerationCard } from "./generation-card";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { GenerationSummary } from "@/lib/generations";
@@ -187,6 +187,47 @@ describe("time left", () => {
   it("does not finish the estimate early when the first of many clips starts", () => {
     render(<ProcessingPanel status="processing" progress={72} message="Creating clip 1/10..." sourceSeconds={3000} outputs={10} />);
     expect(screen.getByText("About 3 min left")).toBeVisible();
+  });
+});
+
+describe("live status", () => {
+  // Detailed messages from the backend's live status; each must still map to its step.
+  const cases: Array<[string, string]> = [
+    ["Downloading the Twitch VOD's audio — 412.0 MB so far · 8.2 MB/s · 51s in", "Fetching video"],
+    ["Transcribing with faster-whisper medium: 1h 12m of 6h 12m of audio (19%) · 4.8× realtime · 1,204 lines so far", "Transcribing"],
+    ["Picking clips: 14 of 37 sections read · reading 2h 36m-2h 48m · 41 candidates so far · last answer from gemini-3.6-flash", "Finding moments"],
+    ["Picking clips: comparing all 70 candidates to choose the best", "Finding moments"],
+    ["Downloading selected segments: video for 20 picks (14m 30s in total) — 312.0 MB so far · 9.1 MB/s · 34s in", "Finding moments"],
+    ["Creating clip 4/20: “He actually aced” (58:11-58:27 in the video) · cutting, framing and adding captions", "Rendering clips"],
+  ];
+
+  for (const [message, step] of cases) {
+    it(`shows "${message.slice(0, 30)}…" under ${step}`, () => {
+      render(<ProcessingPanel status="processing" progress={50} message={message} sourceSeconds={22339} outputs={20} />);
+      expect(screen.getByTestId("live-message")).toHaveTextContent(message);
+      expect(screen.getByText(new RegExp(`^${step} for \\d+s · last update \\d+s ago$`))).toBeVisible();
+    });
+  }
+
+  it("still reads the clip counter from a detailed render message", () => {
+    expect(clipProgressFromMessage("Creating clip 4/20: “Hook 1/2” (58:11-58:27 in the video) · cutting")).toEqual({ current: 4, total: 20 });
+  });
+
+  it("is hidden while queued and on the landing demo", () => {
+    const { rerender } = render(<ProcessingPanel status="queued" progress={0} message="Waiting for your turn" />);
+    expect(screen.queryByTestId("live-message")).not.toBeInTheDocument();
+    rerender(<ProcessingPanel status="processing" progress={40} message="Transcribing" remainingSeconds={120} />);
+    expect(screen.queryByTestId("live-message")).not.toBeInTheDocument();
+  });
+
+  it("never shows a message that is not one of the pipeline's own", () => {
+    render(<ProcessingPanel status="processing" progress={10} message="yt-dlp: HTTP 403 for https://secret.example/token=abc" />);
+    expect(screen.queryByTestId("live-message")).not.toBeInTheDocument();
+    expect(screen.queryByText(/secret\.example/)).not.toBeInTheDocument();
+  });
+
+  it("formats elapsed time like the backend", () => {
+    expect([formatElapsed(38), formatElapsed(245), formatElapsed(4320)]).toEqual(["38s", "4m 05s", "1h 12m"]);
   });
 });
 

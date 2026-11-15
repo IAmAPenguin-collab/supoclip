@@ -232,8 +232,17 @@ def _transcribe_with_faster_whisper(
     ``word``/``start``/``end``/``probability``, so caching and analysis code
     stays unchanged. Progress is logged every ~5% of the audio.
     """
+    from .. import live_status
+
+    if model_name not in _FASTER_WHISPER_MODEL_CACHE:
+        live_status.say_from_thread(
+            30, f"Transcribing: loading the faster-whisper {model_name} model", force=True
+        )
     model = _get_faster_whisper_model(model_name)
     use_vad = (os.getenv("WHISPER_VAD") or "true").strip().lower() not in {"0", "false", "no", "off"}
+    live_status.say_from_thread(
+        30, f"Transcribing: listening for speech in the audio (faster-whisper {model_name})", force=True
+    )
     logger.info(
         "Starting faster-whisper transcription with model: %s (language: %s, vad: %s)",
         model_name,
@@ -267,6 +276,18 @@ def _transcribe_with_faster_whisper(
             {"start": float(seg.start), "end": float(seg.end), "text": seg.text, "words": words}
         )
         texts.append(seg.text)
+        if duration > 0:
+            # The page shows this; live_status throttles it to one write per few seconds.
+            elapsed = time.monotonic() - started
+            fraction = min(seg.end / duration, 1.0)
+            speed = seg.end / elapsed if elapsed > 0 else 0
+            live_status.say_from_thread(
+                30 + int(15 * fraction),
+                f"Transcribing with faster-whisper {model_name}: "
+                f"{live_status.clock(seg.end)} of {live_status.clock(duration)} of audio "
+                f"({fraction * 100:.0f}%) · {speed:.1f}× realtime · "
+                f"{len(segments):,} lines so far",
+            )
         if duration > 0 and seg.end / duration >= next_report:
             elapsed = time.monotonic() - started
             fraction = min(seg.end / duration, 1.0)
@@ -310,6 +331,15 @@ def transcribe_with_whisper(
         "Starting Whisper transcription with model: %s (language: %s)",
         model_name,
         whisper_language or "auto",
+    )
+    from .. import live_status
+
+    # openai-whisper reports no progress until it finishes.
+    live_status.say_from_thread(
+        30,
+        f"Transcribing with openai-whisper {model_name} (it reports no progress until done; "
+        "WHISPER_ENGINE=faster shows live progress)",
+        force=True,
     )
     return model.transcribe(str(audio_path), word_timestamps=True, language=whisper_language)
 

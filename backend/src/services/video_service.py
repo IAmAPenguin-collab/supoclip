@@ -107,7 +107,9 @@ from ..stream_source import (
     download_stream_audio,
     download_stream_sections,
     download_stream_video,
+    stream_work_dir,
 )
+from .. import live_status
 
 logger = logging.getLogger(__name__)
 UPLOAD_URL_PREFIX = "upload://"
@@ -1357,6 +1359,9 @@ class VideoService:
         video_path: Optional[Path] = None
         audio_first = False
         checkpoint = dict(checkpoint or {})
+        # Lets downloads, transcription and clip selection report live detail.
+        live_status.install(progress_callback)
+        stream_dir = stream_work_dir(task_id) if task_id else None
 
         async def save_checkpoint(patch: Dict[str, Any]) -> None:
             if checkpoint_callback:
@@ -1457,10 +1462,13 @@ class VideoService:
                 # seeds that length), so no second metadata request is made here.
                 # Each provider checks the plan cap before downloading media.
                 try:
-                    video_path = await run_in_thread(
-                        download_stream_audio, url, None, task_id,
-                        max_duration=duration_limit, operation=PROCESSING_OPERATION,
-                    )
+                    async with live_status.watch_download(
+                        stream_dir, 10, f"Downloading the {source_type.title()} VOD's audio"
+                    ):
+                        video_path = await run_in_thread(
+                            download_stream_audio, url, None, task_id,
+                            max_duration=duration_limit, operation=PROCESSING_OPERATION,
+                        )
                     audio_first = True
                 except StreamSourceError:
                     # Too long, private, or every provider already failed: a
@@ -1468,10 +1476,13 @@ class VideoService:
                     raise
                 except Exception as exc:
                     logger.warning("Stream audio download unavailable; using full video: %s", exc)
-                    video_path = await run_in_thread(
-                        download_stream_video, url, None, task_id,
-                        max_duration=duration_limit, operation=PROCESSING_OPERATION,
-                    )
+                    async with live_status.watch_download(
+                        stream_dir, 10, f"Downloading the full {source_type.title()} VOD (audio-only failed)"
+                    ):
+                        video_path = await run_in_thread(
+                            download_stream_video, url, None, task_id,
+                            max_duration=duration_limit, operation=PROCESSING_OPERATION,
+                        )
             else:
                 if url.startswith("upload://s3/"):
                     video_path = await run_in_thread(VideoService.resolve_local_video_path, url)
@@ -1633,10 +1644,20 @@ class VideoService:
                 section_error = None
                 try:
                     if source_type in {"twitch", "kick"}:
-                        video_path = await run_in_thread(
-                            download_stream_sections, url, segments_json, file_duration, task_id,
-                            max_duration=duration_limit, operation=PROCESSING_OPERATION,
+                        picked = sum(
+                            max(0.0, parse_timestamp_to_seconds(s.get("end_time", "0")) - parse_timestamp_to_seconds(s.get("start_time", "0")))
+                            for s in segments_json
                         )
+                        async with live_status.watch_download(
+                            stream_dir,
+                            65,
+                            f"Downloading selected segments: video for {len(segments_json)} picks "
+                            f"({live_status.clock(picked)} in total)",
+                        ):
+                            video_path = await run_in_thread(
+                                download_stream_sections, url, segments_json, file_duration, task_id,
+                                max_duration=duration_limit, operation=PROCESSING_OPERATION,
+                            )
                         # Shift word timings onto the stitched sections' timeline.
                         await run_in_thread(
                             copy_transcript_sidecar, audio_path, video_path,
