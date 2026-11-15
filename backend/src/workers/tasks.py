@@ -2,6 +2,7 @@
 Worker tasks - background jobs processed by arq workers.
 """
 
+import asyncio
 import logging
 from typing import Dict, Any, Optional
 import json
@@ -117,6 +118,16 @@ async def process_video_task(
             except Exception:
                 logger.warning("Could not fetch font for task %s; captions use the default", task_id, exc_info=True)
 
+        # A silent heartbeat tells the recovery sweep this worker died mid-run.
+        from .task_recovery import start_heartbeat, stop_heartbeat
+
+        heartbeat = None
+        clear_heartbeat = True
+        try:
+            heartbeat = await start_heartbeat(ctx["redis"], task_id, str(ctx.get("job_id") or ""))
+        except Exception:
+            logger.warning("Could not start the heartbeat of task %s", task_id, exc_info=True)
+
         try:
             # Progress callback
             async def update_progress(
@@ -157,6 +168,10 @@ async def process_video_task(
             logger.info(f"Task {task_id} completed successfully")
             return result
 
+        except asyncio.CancelledError:
+            # A shutdown: arq runs the job again itself, and that run beats again.
+            clear_heartbeat = False
+            raise
         except TaskRunBusy:
             # A resume request may still own the guard while publishing this job.
             # Retry without rewriting task state or creating a dead-letter entry.
@@ -182,6 +197,7 @@ async def process_video_task(
             # Error will be caught by arq and task status will be updated
             raise
         finally:
+            await stop_heartbeat(heartbeat, ctx["redis"], task_id, clear=clear_heartbeat)
             # The slot is held only while this process is actually rendering.
             await release_video_slot(ctx["redis"], user_id, task_id)
             # Hand it to the account's next task now instead of after its deferral.
@@ -306,9 +322,14 @@ async def _maintain_scratch_forever() -> None:
 
 
 async def on_worker_startup(ctx: Dict[str, Any]) -> None:
-    import asyncio
-
     await check_media_volume(ctx["redis"])
+    # Tasks a killed worker left behind go back in line instead of blocking it.
+    try:
+        from .task_recovery import recover_interrupted_video_tasks
+
+        await recover_interrupted_video_tasks(ctx)
+    except Exception:
+        logger.exception("Could not recover interrupted video tasks at startup")
     ctx["scratch_maintenance"] = asyncio.create_task(_maintain_scratch_forever())
 
 

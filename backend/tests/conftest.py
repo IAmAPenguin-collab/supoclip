@@ -194,3 +194,5 @@ def _no_real_notifications_or_exports(monkeypatch):
     """
     monkeypatch.delenv("DISCORD_TASK_WEBHOOK_URL", raising=False)
     monkeypatch.delenv("AUTO_EXPORT_DIR", raising=False)
+    # The fallback chain turns every model build into a FallbackModel.
+    monkeypatch.delenv("LLM_FALLBACK", raising=False)
