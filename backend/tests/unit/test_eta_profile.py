@@ -5,6 +5,8 @@ def _clear(monkeypatch):
     for name in (
         "TRANSCRIPTION_PROVIDER",
         "WHISPER_ENGINE",
+        "WHISPER_MODEL",
+        "WHISPER_MODEL_SIZE",
         "LLM",
         "ETA_TRANSCRIBE_SECONDS_PER_MINUTE",
         "ETA_FIND_SECONDS_PER_MINUTE",
@@ -46,3 +48,12 @@ def test_eta_variables_override_and_bad_values_are_ignored(monkeypatch):
     assert profile["transcribe_seconds_per_minute"] == 3.0
     assert profile["render_seconds_per_clip"] is None
     assert profile["find_seconds_per_minute"] is None
+
+
+def test_faster_models_report_faster_transcription(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("TRANSCRIPTION_PROVIDER", "whisper")
+    monkeypatch.setenv("WHISPER_MODEL_SIZE", "large-v3-turbo")
+    assert eta.eta_profile()["transcribe_seconds_per_minute"] == 9.8
+    monkeypatch.setenv("WHISPER_MODEL_SIZE", "medium")
+    assert eta.eta_profile()["transcribe_seconds_per_minute"] == eta.FASTER_WHISPER_SECONDS_PER_MINUTE

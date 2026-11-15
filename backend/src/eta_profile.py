@@ -16,6 +16,8 @@ from typing import Optional
 
 # Measured on a 12-core desktop CPU (i9-12900K), 6-hour Twitch VOD, 2026-11.
 FASTER_WHISPER_SECONDS_PER_MINUTE = 12.5
+# Relative to medium on the same CPU and speech (benchmark, 2026-11).
+FASTER_WHISPER_MODEL_SPEED = {"large-v3-turbo": 1.27, "small": 2.8, "base": 4.0, "tiny": 6.0}
 OPENAI_WHISPER_SECONDS_PER_MINUTE = 60.0
 LOCAL_LLM_FIND_SECONDS_PER_MINUTE = 34.0
 
@@ -38,7 +40,8 @@ def _transcribe_rate() -> Optional[float]:
     engine = (os.getenv("WHISPER_ENGINE") or "faster").strip().lower()
     if engine in {"openai", "openai-whisper", "openai_whisper"}:
         return OPENAI_WHISPER_SECONDS_PER_MINUTE
-    return FASTER_WHISPER_SECONDS_PER_MINUTE
+    model = (os.getenv("WHISPER_MODEL") or os.getenv("WHISPER_MODEL_SIZE") or "").strip().lower()
+    return round(FASTER_WHISPER_SECONDS_PER_MINUTE / FASTER_WHISPER_MODEL_SPEED.get(model, 1.0), 1)
 
 
 def _find_rate() -> Optional[float]:
