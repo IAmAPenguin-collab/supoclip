@@ -224,7 +224,7 @@ def _get_faster_whisper_model(model_name: str):
 
 
 def _transcribe_with_faster_whisper(
-    audio_path: Path, model_name: str, language: Optional[str]
+    audio_path: Path, model_name: str, language: Optional[str], quiet: bool = False
 ) -> Dict[str, Any]:
     """Run faster-whisper and return the same dict shape openai-whisper produces.
 
@@ -234,15 +234,16 @@ def _transcribe_with_faster_whisper(
     """
     from .. import live_status
 
-    if model_name not in _FASTER_WHISPER_MODEL_CACHE:
+    if model_name not in _FASTER_WHISPER_MODEL_CACHE and not quiet:
         live_status.say_from_thread(
             30, f"Transcribing: loading the faster-whisper {model_name} model", force=True
         )
     model = _get_faster_whisper_model(model_name)
     use_vad = (os.getenv("WHISPER_VAD") or "true").strip().lower() not in {"0", "false", "no", "off"}
-    live_status.say_from_thread(
-        30, f"Transcribing: listening for speech in the audio (faster-whisper {model_name})", force=True
-    )
+    if not quiet:
+        live_status.say_from_thread(
+            30, f"Transcribing: listening for speech in the audio (faster-whisper {model_name})", force=True
+        )
     logger.info(
         "Starting faster-whisper transcription with model: %s (language: %s, vad: %s)",
         model_name,
@@ -276,7 +277,7 @@ def _transcribe_with_faster_whisper(
             {"start": float(seg.start), "end": float(seg.end), "text": seg.text, "words": words}
         )
         texts.append(seg.text)
-        if duration > 0:
+        if duration > 0 and not quiet:
             # The page shows this; live_status throttles it to one write per few seconds.
             elapsed = time.monotonic() - started
             fraction = min(seg.end / duration, 1.0)
@@ -313,6 +314,40 @@ def _transcribe_with_faster_whisper(
     }
 
 
+def _transcribe_split_with_cloudflare(
+    audio_path: Path, model_name: str, language: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """Share the audio with Cloudflare Workers AI when it is set up and has allowance left.
+
+    Returns None to run the whole file on this machine as before.
+    """
+    from . import cloudflare_transcription as cf
+    from .ffmpeg import ffprobe_duration
+    from .. import live_status
+
+    if not cf.enabled() or audio_path.suffix.lower() != ".mp3":
+        return None
+    try:
+        budget = cf.default_budget()
+        if budget.minutes_left() < 1:
+            logger.info("Cloudflare allowance used up for today; transcribing on this PC only")
+            return None
+        duration = float(ffprobe_duration(audio_path) or 0)
+    except Exception:
+        logger.warning("Could not prepare the Cloudflare split; transcribing on this PC", exc_info=True)
+        return None
+    if duration <= 0:
+        return None
+    return cf.transcribe_split(
+        audio_path,
+        duration,
+        language,
+        lambda piece: _transcribe_with_faster_whisper(piece, model_name, language, quiet=True),
+        budget=budget,
+        report=lambda message, fraction: live_status.say_from_thread(30 + int(15 * fraction), message),
+    )
+
+
 def transcribe_with_whisper(
     video_path: Path, model_name: str = "base", language: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -325,6 +360,9 @@ def transcribe_with_whisper(
     audio_path = _prepare_audio_for_transcription(video_path)
     whisper_language = language.split("_", 1)[0] if language else None
     if _whisper_engine() == "faster":
+        split = _transcribe_split_with_cloudflare(audio_path, model_name, whisper_language)
+        if split is not None:
+            return split
         return _transcribe_with_faster_whisper(audio_path, model_name, whisper_language)
     model = _get_whisper_model(model_name)
     logger.info(

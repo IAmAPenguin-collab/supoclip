@@ -196,3 +196,6 @@ def _no_real_notifications_or_exports(monkeypatch):
     monkeypatch.delenv("AUTO_EXPORT_DIR", raising=False)
     # The fallback chain turns every model build into a FallbackModel.
     monkeypatch.delenv("LLM_FALLBACK", raising=False)
+    # A real Cloudflare token would send test audio to Workers AI.
+    monkeypatch.delenv("CLOUDFLARE_API_TOKEN", raising=False)
+    monkeypatch.delenv("CLOUDFLARE_ACCOUNT_ID", raising=False)
